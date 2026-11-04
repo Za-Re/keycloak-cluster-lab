@@ -52,7 +52,7 @@ ansible-galaxy collection install -r requirements.yml
 chmod 600 .vault_pass
 cp group_vars/all/vault.yml.example group_vars/all/vault.yml
 # set every CHANGE_ME in group_vars/all/vault.yml (openssl rand -hex 24)
-ansible-vault encrypt group_vars/all/vault.yml          # encrypted file is safe to commit
+ansible-vault encrypt group_vars/all/vault.yml          # gitignored: everyone creates their own
 ```
 
 Edit later with `ansible-vault edit group_vars/all/vault.yml`.

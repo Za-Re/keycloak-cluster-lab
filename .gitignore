@@ -2,6 +2,8 @@
 /ansible/pki/
 # Vault password and SSH host keys of lab VMs
 /ansible/.vault_pass
+# Real secrets: each user creates their own from vault.yml.example
+/ansible/group_vars/all/vault.yml
 .known_hosts
 # Collections installed from requirements.yml
 /ansible/collections/
