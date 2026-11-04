@@ -1,0 +1,6 @@
+---
+# Extra subjectAltNames for this host's certificate, e.g. ["DNS:auth.lab.test"].
+# Every cert always gets DNS:<inventory_hostname> and IP:<ansible_host>.
+pki_extra_sans: []
+pki_ca_days: 3650
+pki_cert_days: 825

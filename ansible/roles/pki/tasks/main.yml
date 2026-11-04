@@ -1,0 +1,130 @@
+---
+# Part 1 runs on the control node (laptop). The CA key never leaves it.
+- name: Control node | create the lab CA
+  delegate_to: localhost
+  become: false
+  run_once: true
+  block:
+    - name: Control node | PKI directory (owner-only)
+      ansible.builtin.file:
+        path: "{{ pki_dir }}"
+        state: directory
+        mode: "0700"
+
+    - name: Control node | CA private key
+      community.crypto.openssl_privatekey:
+        path: "{{ pki_dir }}/ca.key"
+        type: ECC
+        curve: secp256r1
+        mode: "0600"
+
+    # File-based CSR (not openssl_csr_pipe) so reruns report "ok", not "changed".
+    - name: Control node | CA signing request
+      community.crypto.openssl_csr:
+        path: "{{ pki_dir }}/ca.csr"
+        privatekey_path: "{{ pki_dir }}/ca.key"
+        common_name: Keycloak Lab CA
+        use_common_name_for_san: false
+        # pathlen:0 = this CA may sign server certs but not other CAs.
+        basic_constraints: ["CA:TRUE", "pathlen:0"]
+        basic_constraints_critical: true
+        key_usage: [keyCertSign, cRLSign]
+        key_usage_critical: true
+        mode: "0644"
+
+    - name: Control node | CA certificate (self-signed)
+      community.crypto.x509_certificate:
+        path: "{{ pki_dir }}/ca.crt"
+        csr_path: "{{ pki_dir }}/ca.csr"
+        privatekey_path: "{{ pki_dir }}/ca.key"
+        provider: selfsigned
+        selfsigned_not_after: "+{{ pki_ca_days }}d"
+        mode: "0644"
+
+# Still on the control node, but once per inventory host.
+- name: Control node | issue this host's certificate
+  delegate_to: localhost
+  become: false
+  block:
+    # PKCS#8 is the PEM key format every consumer here reads
+    # (OpenSSL/PostgreSQL, HAProxy, Java/Keycloak).
+    - name: Control node | host private key
+      community.crypto.openssl_privatekey:
+        path: "{{ pki_dir }}/{{ inventory_hostname }}.key"
+        type: ECC
+        curve: secp256r1
+        format: pkcs8
+        mode: "0600"
+
+    - name: Control node | host signing request
+      community.crypto.openssl_csr:
+        path: "{{ pki_dir }}/{{ inventory_hostname }}.csr"
+        privatekey_path: "{{ pki_dir }}/{{ inventory_hostname }}.key"
+        common_name: "{{ inventory_hostname }}"
+        # Clients check the SAN, not the CN: name + IP so both work with verify-full.
+        subject_alt_name: "{{ ['DNS:' ~ inventory_hostname, 'IP:' ~ ansible_host] + pki_extra_sans }}"
+        key_usage: [digitalSignature]
+        key_usage_critical: true
+        extended_key_usage: [serverAuth]
+        mode: "0644"
+
+    - name: Control node | host certificate signed by the lab CA
+      community.crypto.x509_certificate:
+        path: "{{ pki_dir }}/{{ inventory_hostname }}.crt"
+        csr_path: "{{ pki_dir }}/{{ inventory_hostname }}.csr"
+        provider: ownca
+        ownca_path: "{{ pki_dir }}/ca.crt"
+        ownca_privatekey_path: "{{ pki_dir }}/ca.key"
+        ownca_not_after: "+{{ pki_cert_days }}d"
+        mode: "0644"
+
+# Part 2 runs on each host: only the CA cert and that host's own cert + key.
+# The "ssl-cert" group is Ubuntu's convention for "may read TLS keys";
+# service users (postgres, keycloak, haproxy) are added to it by their roles.
+- name: Install ssl-cert (provides the ssl-cert group)
+  ansible.builtin.apt:
+    name: ssl-cert
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Certificate directory
+  ansible.builtin.file:
+    path: "{{ pki_remote_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: CA certificate and this host's certificate
+  ansible.builtin.copy:
+    src: "{{ pki_dir }}/{{ item.src }}"
+    dest: "{{ pki_remote_dir }}/{{ item.dest }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - { src: ca.crt, dest: ca.crt }
+    - { src: "{{ inventory_hostname }}.crt", dest: server.crt }
+
+# 0640 root:ssl-cert instead of 0600: services read it as their own user
+# via group membership; nobody else can.
+- name: This host's private key
+  ansible.builtin.copy:
+    src: "{{ pki_dir }}/{{ inventory_hostname }}.key"
+    dest: "{{ pki_remote_dir }}/server.key"
+    owner: root
+    group: ssl-cert
+    mode: "0640"
+  no_log: true
+
+# Lets curl/psql on the VMs verify lab certs during troubleshooting.
+# (Java does not use this store; Keycloak gets the CA path explicitly.)
+- name: Trust the lab CA system-wide
+  ansible.builtin.copy:
+    src: "{{ pki_dir }}/ca.crt"
+    dest: /usr/local/share/ca-certificates/keycloak-lab-ca.crt
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Update CA trust store
