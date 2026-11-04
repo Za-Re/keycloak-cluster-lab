@@ -1,0 +1,6 @@
+---
+- name: PKI (certificates for every host)
+  hosts: all
+  become: true
+  roles:
+    - pki
