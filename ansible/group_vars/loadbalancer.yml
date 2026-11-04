@@ -1,0 +1,4 @@
+---
+# Browsers connect to the public name, which HAProxy serves.
+pki_extra_sans:
+  - "DNS:{{ public_hostname }}"

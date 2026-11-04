@@ -1,0 +1,12 @@
+---
+public_hostname: auth.lab.test
+
+# Who may reach /admin/ and /realms/master/ through HAProxy.
+# 192.168.56.1 = the laptop's address on the VirtualBox host-only network.
+admin_allowed_cidrs:
+  - 192.168.56.1/32
+
+# Local PKI: generated on the control node, never committed (.gitignore).
+pki_dir: "{{ playbook_dir }}/pki"
+# Where each host receives its own cert/key and the CA.
+pki_remote_dir: /etc/ssl/lab
