@@ -2,7 +2,7 @@
 /ansible/pki/
 # Vault password and SSH host keys of lab VMs
 /ansible/.vault_pass
-/ansible/.known_hosts
+.known_hosts
 # Collections installed from requirements.yml
 /ansible/collections/
 # Vagrant state (contains per-VM private keys)
