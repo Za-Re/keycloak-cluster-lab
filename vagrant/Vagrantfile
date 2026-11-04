@@ -1,0 +1,61 @@
+# Lab VMs only. Vagrant creates machines; Ansible (run from the laptop
+# against ../ansible/inventory/hosts.ini)
+#
+#   KC_NODES=5 vagrant up      # more Keycloak nodes (also add them to ../ansible/inventory/hosts.ini)
+#
+# Needs the dedicated lab key first (see README):
+#   ssh-keygen -t ed25519 -f ~/.ssh/keycloak-lab_ed25519 -C keycloak-lab -N ""
+
+KC_NODES = Integer(ENV.fetch("KC_NODES", "2")) # default: 2 Keycloak nodes
+unless (1..5).cover?(KC_NODES)
+  abort "KC_NODES must be between 1 and 5"
+end
+
+SSH_PUBKEY_PATH = File.expand_path("~/.ssh/keycloak-lab_ed25519.pub")
+unless File.exist?(SSH_PUBKEY_PATH)
+  abort "Missing #{SSH_PUBKEY_PATH} — create it first (see README step 1)"
+end
+SSH_PUBKEY = File.read(SSH_PUBKEY_PATH).strip
+if SSH_PUBKEY.empty?
+  abort "The lab SSH public key is empty"
+end
+
+MACHINES = {
+  "lb1" => { ip: "192.168.56.10", mem: 1024, cpus: 1 },
+  "db1" => { ip: "192.168.56.11", mem: 1024, cpus: 1 },
+}
+(1..KC_NODES).each do |i|
+  MACHINES["kc#{i}"] = { ip: "192.168.56.#{20 + i}", mem: 2048, cpus: 2 }
+end
+
+Vagrant.configure("2") do |config|
+  config.vm.box         = "bento/ubuntu-24.04"
+  config.vm.box_version = "202510.26.0"   # pinned: same image on every rebuild
+
+  # Keep host files out of the guest so the lab behaves like remote servers.
+  # This also avoids introducing a host-writable mount into the later
+  # systemd filesystem-protection setup.
+  config.vm.synced_folder ".", "/vagrant", disabled: true
+
+  # Authorize the dedicated lab key for the vagrant user. Ansible then uses one
+  # key for every host, like on real servers (no per-VM .vagrant/ key paths).
+  config.vm.provision "shell", args: [SSH_PUBKEY], inline: <<~'SH'
+    install -d -m 700 -o vagrant -g vagrant /home/vagrant/.ssh
+    touch /home/vagrant/.ssh/authorized_keys
+    grep -qxF "$1" /home/vagrant/.ssh/authorized_keys || echo "$1" >> /home/vagrant/.ssh/authorized_keys
+    chown vagrant:vagrant /home/vagrant/.ssh/authorized_keys
+    chmod 600 /home/vagrant/.ssh/authorized_keys
+  SH
+
+  MACHINES.each do |name, m|
+    config.vm.define name do |node|
+      node.vm.hostname = name
+      node.vm.network "private_network", ip: m[:ip]
+      node.vm.provider "virtualbox" do |vb|
+        vb.name   = "kclab-#{name}"
+        vb.memory = m[:mem]
+        vb.cpus   = m[:cpus]
+      end
+    end
+  end
+end
