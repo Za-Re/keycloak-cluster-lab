@@ -1,3 +1,100 @@
 # keycloak-Lab
 
 Implementation of a Keycloak cluster on local VMs (Vagrant + VirtualBox), configured with Ansible.
+
+```
+browser --HTTPS 443--> HAProxy (lb1) --HTTPS 8443--> kc1..kcN --PostgreSQL/TLS--> db1
+```
+
+| Host | IP | RAM |
+|------|----|-----|
+| lb1  | 192.168.56.10 | 1 GB |
+| db1  | 192.168.56.11 | 1 GB |
+| kcN  | 192.168.56.2N | 2 GB |
+
+Vagrant only creates the machines. Ansible runs from the laptop against the static
+`ansible/inventory/hosts.ini`, so the same playbooks work against actual servers.
+
+```
+vagrant/    lab VMs
+ansible/    VMs config
+```
+
+Run `vagrant` commands from `vagrant/` and `ansible*` commands from `ansible/`
+(Ansible only reads `ansible.cfg` from the current directory).
+
+## How to Run
+
+### 1. Create dedicated SSH key for the lab
+
+```bash
+ssh-keygen -t ed25519 -f ~/.ssh/keycloak-lab_ed25519 -C keycloak-lab -N ""
+```
+
+A separate key lives in `~/.ssh`, outside the repo. No passphrase so Ansible can use it without an agent. This is acceptable for throwaway lab VMs, not for real servers.
+
+On first boot, `vagrant up` runs a small script inside each VM that adds this
+public key to the `vagrant` user's `authorized_keys`. Ansible then logs in with
+the matching private key (set in `ansible.cfg`).
+
+### 2. Install Ansible collections
+
+```bash
+cd ansible
+ansible-galaxy collection install -r requirements.yml
+```
+
+### 3. Secrets (ansible-vault)
+
+```bash
+# in ansible/
+( umask 077; openssl rand -base64 32 > .vault_pass )
+chmod 600 .vault_pass
+cp group_vars/all/vault.yml.example group_vars/all/vault.yml
+# set every CHANGE_ME in group_vars/all/vault.yml (openssl rand -hex 24)
+ansible-vault encrypt group_vars/all/vault.yml          # encrypted file is safe to commit
+```
+
+Edit later with `ansible-vault edit group_vars/all/vault.yml`.
+
+### 4. VMs
+
+```bash
+cd vagrant
+vagrant up            # create/start all VMs (KC_NODES=5 vagrant up for more kc nodes)
+vagrant halt          # stop them, keep disks
+vagrant destroy -f    # delete them; then: rm -f ../ansible/.known_hosts
+```
+
+More kc nodes: `KC_NODES=N` **and** add the hosts to `ansible/inventory/hosts.ini`
+(IP pattern `192.168.56.2N`).
+
+### 5. Laptop name resolution
+
+Add to `/etc/hosts` on the laptop:
+
+```
+192.168.56.10 auth.lab.test
+```
+
+### 6. Run
+
+```bash
+cd ansible
+ansible all -m ping
+ansible-playbook site.yml
+```
+
+## PKI
+
+`roles/pki` builds a local CA on the laptop in `ansible/pki/` (gitignored, dir 0700, keys 0600)
+and issues an ECDSA P-256 cert per host with SANs `DNS:<host>` + `IP:<ip>`
+(lb1 also gets `DNS:auth.lab.test`). Each host receives only:
+
+| File on host | Mode |
+|---|---|
+| `/etc/ssl/lab/ca.crt` | 0644 |
+| `/etc/ssl/lab/server.crt` | 0644 |
+| `/etc/ssl/lab/server.key` | 0640 root:ssl-cert (service users join `ssl-cert`) |
+
+The CA private key never leaves the laptop.
