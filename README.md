@@ -69,6 +69,8 @@ vagrant destroy -f    # delete them; then: rm -f ../ansible/.known_hosts
 More kc nodes: `KC_NODES=N` **and** add the hosts to `ansible/inventory/hosts.ini`
 (IP pattern `192.168.56.2N`).
 
+`rm .known_hosts` after `vagrant destroy`
+
 ### 5. Laptop name resolution
 
 Add to `/etc/hosts` on the laptop:
