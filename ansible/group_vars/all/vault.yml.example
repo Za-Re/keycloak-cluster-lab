@@ -1,8 +1,7 @@
 ---
-# vault_client_secret = the fastapi-app's OIDC_CLIENT_SECRET
 
 vault_db_password: CHANGE_ME
 vault_kc_bootstrap_admin_password: CHANGE_ME
 vault_kc_admin_password: CHANGE_ME
-vault_test_user_password: CHANGE_ME
-vault_client_secret: CHANGE_ME
+vault_kc_test_user_password: CHANGE_ME
+vault_kc_fastapi_client_secret: CHANGE_ME

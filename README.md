@@ -37,14 +37,14 @@ On first boot, `vagrant up` runs a small script inside each VM that adds this
 public key to the `vagrant` user's `authorized_keys`. Ansible then logs in with
 the matching private key (set in `ansible.cfg`).
 
-### 2. Install Ansible collections
+### 2. Install Ansible Collections
 
 ```bash
 cd ansible
 ansible-galaxy collection install -r requirements.yml
 ```
 
-### 3. Secrets (ansible-vault)
+### 3. Create Secrets (ansible-vault)
 
 ```bash
 # in ansible/
