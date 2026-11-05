@@ -1,0 +1,14 @@
+# Managed by Ansible. First matching line wins.
+# TYPE   DATABASE  USER      ADDRESS            METHOD
+
+# Local admin (Ansible, backups): OS user postgres over the Unix socket.
+local    all       postgres                     peer
+
+# Keycloak nodes only: TLS required, one database, one user, SCRAM password.
+{% for h in groups['keycloak'] %}
+hostssl  {{ keycloak_db_name }}  {{ keycloak_db_user }}  {{ hostvars[h].ansible_host }}/32  scram-sha-256
+{% endfor %}
+
+# Everything else (other hosts, users, databases, or no TLS): refused.
+host     all       all       0.0.0.0/0          reject
+host     all       all       ::/0               reject

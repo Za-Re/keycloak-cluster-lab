@@ -1,0 +1,6 @@
+---
+# Restart, not reload: listen_addresses only changes on restart.
+- name: Restart PostgreSQL
+  ansible.builtin.systemd_service:
+    name: "postgresql@{{ postgresql_version }}-main"
+    state: restarted

@@ -1,0 +1,12 @@
+# Managed by Ansible
+[Unit]
+Description=Nightly backup of the Keycloak database
+
+[Timer]
+OnCalendar={{ postgresql_backup_time }}
+RandomizedDelaySec=15m
+# Run a missed backup at next boot (e.g. VM was off at 02:00).
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,16 @@
+#!/bin/sh
+# Managed by Ansible. Dumps the Keycloak database; keeps {{ postgresql_backup_retention_days }} days.
+set -eu
+
+dir={{ postgresql_backup_dir }}
+file="$dir/{{ keycloak_db_name }}-$(date -u +%Y%m%dT%H%M%SZ).dump"
+
+# Leftovers from an interrupted run are never valid backups.
+find "$dir" -name '*.partial' -delete
+
+# Write under a temporary name; rename only after pg_dump succeeded.
+pg_dump --format=custom --file="$file.partial" {{ keycloak_db_name }}
+mv "$file.partial" "$file"
+
+# Prune only after a successful dump (set -e stops us earlier on failure).
+find "$dir" -name '{{ keycloak_db_name }}-*.dump' -mtime +{{ postgresql_backup_retention_days - 1 }} -delete

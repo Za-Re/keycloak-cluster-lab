@@ -1,0 +1,14 @@
+---
+# Explicit major version: a new major only arrives when this number changes.
+# 18 = the version Keycloak tests against (keycloak.org/server/db).
+postgresql_version: 18
+postgresql_conf_dir: "/etc/postgresql/{{ postgresql_version }}/main"
+
+# PGDG = the official PostgreSQL apt repository (postgresql.org/download/linux/ubuntu)
+postgresql_pgdg_key_url: https://www.postgresql.org/media/keys/ACCC4CF8.asc
+postgresql_pgdg_key_file: /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc
+postgresql_pgdg_key_fingerprint: B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8
+
+postgresql_backup_dir: /var/backups/keycloak
+postgresql_backup_retention_days: 7
+postgresql_backup_time: "*-*-* 02:00:00"   # systemd OnCalendar format

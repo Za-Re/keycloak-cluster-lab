@@ -1,0 +1,162 @@
+---
+# --- Official PostgreSQL repository (PGDG) -----------------------------------
+# gpg: check the key. python3-debian: needed by deb822_repository.
+# python3-psycopg2: needed by the community.postgresql modules below.
+- name: Helper packages
+  ansible.builtin.apt:
+    name: [ca-certificates, gpg, python3-debian, python3-psycopg2]
+    state: present
+
+- name: PGDG key directory
+  ansible.builtin.file:
+    path: "{{ postgresql_pgdg_key_file | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Download PGDG signing key
+  ansible.builtin.get_url:
+    url: "{{ postgresql_pgdg_key_url }}"
+    dest: "{{ postgresql_pgdg_key_file }}"
+    owner: root
+    group: root
+    mode: "0644"
+
+# HTTPS proves we reached postgresql.org; the fingerprint proves it is the
+# key PostgreSQL publishes. apt trusts every package signed by this key.
+- name: Read PGDG key fingerprint
+  ansible.builtin.command: gpg --show-keys --with-colons {{ postgresql_pgdg_key_file }}
+  register: postgresql_pgdg_key
+  changed_when: false
+
+- name: PGDG key fingerprint matches the published one
+  ansible.builtin.assert:
+    that: postgresql_pgdg_key_fingerprint in postgresql_pgdg_key.stdout
+    fail_msg: PGDG key fingerprint mismatch — not adding the repository
+
+- name: PGDG repository
+  ansible.builtin.deb822_repository:
+    name: pgdg
+    types: [deb]
+    uris: https://apt.postgresql.org/pub/repos/apt
+    suites: ["{{ ansible_facts.distribution_release }}-pgdg"]
+    components: [main]
+    signed_by: "{{ postgresql_pgdg_key_file }}"
+  register: postgresql_pgdg_repo
+
+- name: Refresh apt after adding the repository
+  ansible.builtin.apt:
+    update_cache: true
+  when: postgresql_pgdg_repo.changed
+
+# --- Server -----------------------------------------------------------------
+# The package creates and starts the cluster "<version>/main".
+- name: PostgreSQL server
+  ansible.builtin.apt:
+    name: "postgresql-{{ postgresql_version }}"
+    state: present
+
+# Lets postgres read /etc/ssl/lab/server.key (root:ssl-cert 0640).
+- name: Postgres user may read TLS keys
+  ansible.builtin.user:
+    name: postgres
+    groups: ssl-cert
+    append: true
+  notify: Restart PostgreSQL
+
+# postgresql.conf includes conf.d/ at its end and PostgreSQL keeps the LAST
+# value it reads, so these override Ubuntu's defaults (e.g. the snakeoil cert).
+- name: Server settings (listen address, TLS, password hashing)
+  ansible.builtin.copy:
+    dest: "{{ postgresql_conf_dir }}/conf.d/10-lab.conf"
+    content: |
+      # Managed by Ansible
+      listen_addresses = '{{ ansible_host }}'
+      ssl = on
+      ssl_cert_file = '{{ pki_remote_dir }}/server.crt'
+      ssl_key_file = '{{ pki_remote_dir }}/server.key'
+      ssl_min_protocol_version = 'TLSv1.2'
+      password_encryption = 'scram-sha-256'
+    owner: postgres
+    group: postgres
+    mode: "0644"
+  notify: Restart PostgreSQL
+
+- name: Client access rules (pg_hba.conf)
+  ansible.builtin.template:
+    src: pg_hba.conf.j2
+    dest: "{{ postgresql_conf_dir }}/pg_hba.conf"
+    owner: postgres
+    group: postgres
+    mode: "0640"
+  notify: Restart PostgreSQL
+
+# Apply config now, so the DB/user tasks below talk to the configured server.
+- name: Apply PostgreSQL config changes
+  ansible.builtin.meta: flush_handlers
+
+# --- Keycloak database ------------------------------------------------------
+# Run as OS user postgres -> matches "local all postgres peer", no password.
+# Idempotent with SCRAM: the module re-hashes our password with the stored
+# salt and compares, so reruns report "ok".
+- name: Keycloak database user
+  community.postgresql.postgresql_user:
+    name: "{{ keycloak_db_user }}"
+    password: "{{ vault_db_password }}"
+  become_user: postgres
+  no_log: true
+
+# template0 + UTF8: guaranteed UTF-8 regardless of the VM's locale.
+- name: Keycloak database
+  community.postgresql.postgresql_db:
+    name: "{{ keycloak_db_name }}"
+    owner: "{{ keycloak_db_user }}"
+    encoding: UTF8
+    template: template0
+  become_user: postgres
+
+# --- Firewall -----------------------------------------------------------------
+# Second layer next to pg_hba: packets from other hosts never reach PostgreSQL.
+- name: Firewall allows PostgreSQL from Keycloak nodes only
+  community.general.ufw:
+    rule: allow
+    port: "5432"
+    proto: tcp
+    from_ip: "{{ hostvars[item].ansible_host }}"
+    comment: "postgresql from {{ item }}"
+  loop: "{{ groups['keycloak'] }}"
+
+# --- Nightly backup (systemd timer) ---------------------------------------------
+- name: Backup directory (postgres only)
+  ansible.builtin.file:
+    path: "{{ postgresql_backup_dir }}"
+    state: directory
+    owner: postgres
+    group: postgres
+    mode: "0700"
+
+- name: Backup script
+  ansible.builtin.template:
+    src: keycloak-db-backup.sh.j2
+    dest: /usr/local/sbin/keycloak-db-backup
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Backup service and timer units
+  ansible.builtin.template:
+    src: "keycloak-db-backup.{{ item }}.j2"
+    dest: "/etc/systemd/system/keycloak-db-backup.{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: [service, timer]
+
+# daemon_reload picks up new/changed unit files before enabling.
+- name: Backup timer enabled
+  ansible.builtin.systemd_service:
+    name: keycloak-db-backup.timer
+    state: started
+    enabled: true
+    daemon_reload: true
