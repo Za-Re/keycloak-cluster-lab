@@ -1,0 +1,103 @@
+---
+- name: Upgrade all packages
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 3600
+    upgrade: dist
+
+# Installs Chrony, sets the timezone, and enables the time 
+# synchronization service. Consistent clocks matter for TLS 
+# certificates, token expiration, and cluster health checks.
+- name: Base packages
+  ansible.builtin.apt:
+    name: [unattended-upgrades, chrony, ufw]
+    state: present
+
+- name: Timezone
+  community.general.timezone:
+    name: "{{ common_timezone }}"
+
+- name: Chrony running and enabled at boot
+  ansible.builtin.systemd_service:
+    name: chrony
+    state: started
+    enabled: true
+
+# --- Automatic updates: security only ---------------------------------------
+- name: Enable daily unattended upgrades
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+    owner: root
+    group: root
+    mode: "0644"
+
+# Read after Ubuntu's 50unattended-upgrades: clear its origin 
+# lists and allow only the -security pocket.
+# No automatic reboot (would hit all kc nodes at once).
+- name: Restrict unattended upgrades to security updates
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/52unattended-upgrades-security-only
+    content: |
+      // Managed by Ansible
+      #clear Unattended-Upgrade::Allowed-Origins;
+      #clear Unattended-Upgrade::Origins-Pattern;
+      Unattended-Upgrade::Allowed-Origins {
+          "${distro_id}:${distro_codename}-security";
+      };
+    owner: root
+    group: root
+    mode: "0644"
+
+# --- SSH hardening ---------------------------------------------------------
+# OpenSSH generally uses the first value obtained for each setting.
+# Ubuntu reads sshd_config.d drop-ins before the main sshd_config file,
+# in lexical order. The 00- prefix makes this file take precedence over
+# later drop-ins and settings in the main file, provided no earlier
+# configuration file sets the same option.
+- name: SSH hardening drop-in
+  ansible.builtin.copy:
+    dest: /etc/ssh/sshd_config.d/00-hardening.conf
+    content: |
+      # Managed by Ansible
+      PermitRootLogin no
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      AuthenticationMethods publickey
+    owner: root
+    group: root
+    mode: "0644"
+    # Test the file with sshd before installing it: a broken config = lockout.
+    validate: /usr/sbin/sshd -t -f %s
+  notify: Reload sshd
+
+# --- Firewall ------------------------------------------------------------
+# Allow SSH BEFORE enabling ufw, or enabling it would cut our 
+# own connection.
+- name: Firewall allows SSH
+  community.general.ufw:
+    rule: allow
+    port: "22"
+    proto: tcp
+
+# Default deny incoming: every other port stays closed unless 
+# a role opens it.
+- name: Firewall on, deny incoming by default
+  community.general.ufw:
+    state: enabled
+    direction: incoming
+    default: deny
+
+# --- Name resolution between lab hosts ---------------------------------------
+# Adds every Ansible inventory host to /etc/hosts. This lets VMs communicate 
+# using stable names instead of IP addresses, even without a DNS server.
+- name: Lab hosts in /etc/hosts
+  ansible.builtin.blockinfile:
+    path: /etc/hosts
+    marker: "# {mark} ANSIBLE MANAGED: lab hosts"
+    block: |
+      {% for h in groups['all'] %}
+      {{ hostvars[h].ansible_host }} {{ h }}
+      {% endfor %}

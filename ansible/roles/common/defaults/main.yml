@@ -1,0 +1,3 @@
+---
+# Servers run in UTC: log timestamps line up across hosts and there is no DST jump.
+common_timezone: Etc/UTC

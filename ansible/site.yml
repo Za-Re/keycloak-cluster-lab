@@ -1,4 +1,10 @@
 ---
+- name: Base system (updates, time, SSH, firewall)
+  hosts: all
+  become: true
+  roles:
+    - common
+
 - name: PKI (certificates for every host)
   hosts: all
   become: true
