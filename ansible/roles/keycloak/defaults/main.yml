@@ -19,6 +19,10 @@ keycloak_management_port: 9000
 # jdbc-ping: 7800 data, 57800 failure detection (keycloak.org/server/caching)
 keycloak_cluster_ports: [7800, 57800]
 
+# On stop, report "not ready" this long while still serving, so the load balancer
+# drops the node first. Must exceed HAProxy's detection time (inter 5s x fall 3 = 15s).
+keycloak_shutdown_delay: 18s
+
 # Temporary admin for the first start; roles/keycloak_config replaces and deletes it.
 keycloak_bootstrap_admin_user: temp-admin
 keycloak_bootstrap_env: /etc/keycloak/bootstrap.env

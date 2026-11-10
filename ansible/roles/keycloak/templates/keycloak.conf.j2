@@ -37,3 +37,10 @@ proxy-trusted-addresses={{ groups['loadbalancer'] | map('extract', hostvars, 'an
 cache=ispn
 cache-stack=jdbc-ping
 cache-embedded-network-bind-address={{ ansible_host }}
+# Encrypted node-to-node traffic (default true; stated explicitly).
+cache-embedded-mtls-enabled=true
+# No sticky sessions (not recommended since 26.6)
+spi-sticky-session-encoder--infinispan--should-attach-route=false
+
+# Graceful stop: report not-ready first, keep serving while the load balancer reacts.
+shutdown-delay={{ keycloak_shutdown_delay }}
