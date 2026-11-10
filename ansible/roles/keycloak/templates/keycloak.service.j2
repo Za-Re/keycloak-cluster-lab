@@ -1,0 +1,27 @@
+# Managed by Ansible
+[Unit]
+Description=Keycloak
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User={{ keycloak_user }}
+Group={{ keycloak_user }}
+# "-" = optional. Exists only for the first start (bootstrap admin).
+EnvironmentFile=-{{ keycloak_bootstrap_env }}
+ExecStart={{ keycloak_home }}/bin/kc.sh start --optimized
+# Java exits with 143 on SIGTERM: a normal stop, not a failure.
+SuccessExitStatus=143
+Restart=on-failure
+RestartSec=10
+LimitNOFILE=65536
+
+# Sandbox: read-only system except Keycloak's data directory.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths={{ keycloak_install_dir }}/data
+
+[Install]
+WantedBy=multi-user.target

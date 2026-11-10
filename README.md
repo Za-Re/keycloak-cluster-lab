@@ -20,6 +20,8 @@ vagrant/    lab VMs
 ansible/    VMs config
 ```
 
+Building it yourself step by step? Follow [docs/build-guide.md](docs/build-guide.md).
+
 Run `vagrant` commands from `vagrant/` and `ansible*` commands from `ansible/`
 (Ansible only reads `ansible.cfg` from the current directory).
 
@@ -100,3 +102,47 @@ and issues an ECDSA P-256 cert per host with SANs `DNS:<host>` + `IP:<ip>`
 | `/etc/ssl/lab/server.key` | 0640 root:ssl-cert (service users join `ssl-cert`) |
 
 The CA private key never leaves the laptop.
+
+## Database (db1)
+
+PostgreSQL 18 from the official PostgreSQL apt repository (key fingerprint verified).
+Listens on 192.168.56.11 only, TLS on (lab cert). `pg_hba.conf` allows only
+`hostssl keycloak keycloak <kc-IP>/32 scram-sha-256`; everything else is rejected.
+ufw opens 5432 to the kc nodes only.
+
+PostgreSQL minor updates are not installed by unattended-upgrades (security pocket
+only); they arrive with the next `ansible-playbook site.yml` run.
+
+### Backups
+
+`keycloak-db-backup.timer` runs nightly at 02:00 → `/var/backups/keycloak/keycloak-<UTC time>.dump`
+(`pg_dump` custom format, 0600). Dumps older than 7 days are deleted, only after a successful new dump.
+
+```bash
+# on db1 (vagrant ssh db1)
+systemctl list-timers keycloak-db-backup.timer      # next/last run
+sudo systemctl start keycloak-db-backup.service     # back up now
+journalctl -u keycloak-db-backup.service            # result of past runs
+sudo ls -l /var/backups/keycloak/
+```
+
+### Restore
+
+Keycloak must not write to the database during a restore.
+
+```bash
+# 1. laptop, in ansible/: stop Keycloak on all nodes
+ansible keycloak -b -m ansible.builtin.systemd_service -a "name=keycloak state=stopped"
+
+# 2. db1: recreate an empty database and load the dump into it
+sudo -u postgres dropdb keycloak
+sudo -u postgres createdb --owner=keycloak --encoding=UTF8 --template=template0 keycloak
+sudo -u postgres pg_restore --dbname=keycloak --no-owner --role=keycloak \
+  /var/backups/keycloak/keycloak-<UTC time>.dump
+
+# 3. laptop: start Keycloak again
+ansible keycloak -b -m ansible.builtin.systemd_service -a "name=keycloak state=started"
+```
+
+`--no-owner --role=keycloak`: restored tables belong to the `keycloak` user,
+whoever owned them when the dump was taken.

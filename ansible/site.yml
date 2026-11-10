@@ -16,3 +16,9 @@
   become: true
   roles:
     - postgresql
+
+- name: Keycloak nodes
+  hosts: keycloak
+  become: true
+  roles:
+    - keycloak

@@ -1,0 +1,185 @@
+---
+- name: Java runtime
+  ansible.builtin.apt:
+    name: "{{ keycloak_java_package }}"
+    state: present
+
+# Service account: no login shell, no home. ssl-cert -> may read server.key.
+- name: Keycloak system user
+  ansible.builtin.user:
+    name: "{{ keycloak_user }}"
+    system: true
+    shell: /usr/sbin/nologin
+    create_home: false
+    home: "{{ keycloak_home }}"
+    groups: ssl-cert
+    append: true
+
+# --- Install ------------------------------------------------------------------
+# Fails on a hash mismatch; skips the download when the file already matches.
+- name: Download Keycloak (checksum verified)
+  ansible.builtin.get_url:
+    url: "{{ keycloak_download_url }}"
+    dest: "{{ keycloak_install_dir }}.tar.gz"
+    checksum: "sha256:{{ keycloak_sha256 }}"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Install directory
+  ansible.builtin.file:
+    path: "{{ keycloak_install_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+# Root-owned: the service user cannot modify its own program files.
+- name: Unpack Keycloak
+  ansible.builtin.unarchive:
+    src: "{{ keycloak_install_dir }}.tar.gz"
+    dest: "{{ keycloak_install_dir }}"
+    remote_src: true
+    extra_opts: [--strip-components=1]
+    creates: "{{ keycloak_install_dir }}/bin/kc.sh"
+    owner: root
+    group: root
+
+# The only place Keycloak writes at runtime.
+- name: Runtime data directory
+  ansible.builtin.file:
+    path: "{{ keycloak_install_dir }}/data"
+    state: directory
+    owner: "{{ keycloak_user }}"
+    group: "{{ keycloak_user }}"
+    mode: "0750"
+
+- name: Point /opt/keycloak at this version
+  ansible.builtin.file:
+    src: "{{ keycloak_install_dir }}"
+    dest: "{{ keycloak_home }}"
+    state: link
+
+# --- Config + build -----------------------------------------------------------
+# Contains the DB password: readable by root and the service user only.
+- name: Keycloak configuration
+  ansible.builtin.template:
+    src: keycloak.conf.j2
+    dest: "{{ keycloak_install_dir }}/conf/keycloak.conf"
+    owner: root
+    group: "{{ keycloak_user }}"
+    mode: "0640"
+  no_log: true
+  notify: Restart Keycloak
+
+# Stamp only after success (a failed build is retried); old stamps go first so
+# returning to an earlier config rebuilds. Build runs as root -> hand data/ back.
+- name: Build Keycloak (only when version or build options changed)
+  ansible.builtin.shell: |
+    set -e
+    rm -f {{ keycloak_install_dir }}/.built-*
+    {{ keycloak_home }}/bin/kc.sh build
+    chown -R {{ keycloak_user }}:{{ keycloak_user }} {{ keycloak_install_dir }}/data
+    touch {{ keycloak_build_stamp }}
+  args:
+    creates: "{{ keycloak_build_stamp }}"
+  notify: Restart Keycloak
+
+# --- Firewall -----------------------------------------------------------------
+- name: Firewall allows HTTPS and management from the load balancer only
+  community.general.ufw:
+    rule: allow
+    port: "{{ item.1 }}"
+    proto: tcp
+    from_ip: "{{ hostvars[item.0].ansible_host }}"
+    comment: "keycloak from {{ item.0 }}"
+  loop: "{{ groups['loadbalancer'] | product([keycloak_https_port, keycloak_management_port]) | list }}"
+
+- name: Firewall allows cluster ports from the other Keycloak nodes only
+  community.general.ufw:
+    rule: allow
+    port: "{{ item.1 }}"
+    proto: tcp
+    from_ip: "{{ hostvars[item.0].ansible_host }}"
+    comment: "keycloak cluster from {{ item.0 }}"
+  loop: "{{ groups['keycloak'] | difference([inventory_hostname]) | product(keycloak_cluster_ports) | list }}"
+
+# --- Bootstrap admin (first start only) -----------------------------------------
+# Only the first node: the database is shared. Root-only file, read by systemd
+# before it drops to the keycloak user. Removed below after the first start.
+- name: Keycloak config directory
+  ansible.builtin.file:
+    path: "{{ keycloak_bootstrap_env | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Has the bootstrap already happened?
+  ansible.builtin.stat:
+    path: "{{ keycloak_bootstrap_marker }}"
+  register: keycloak_bootstrap_done
+
+- name: Bootstrap admin credentials for the first start
+  ansible.builtin.copy:
+    dest: "{{ keycloak_bootstrap_env }}"
+    content: |
+      KC_BOOTSTRAP_ADMIN_USERNAME={{ keycloak_bootstrap_admin_user }}
+      KC_BOOTSTRAP_ADMIN_PASSWORD={{ vault_kc_bootstrap_admin_password }}
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+  when:
+    - not keycloak_bootstrap_done.stat.exists
+    - inventory_hostname == groups['keycloak'] | first
+
+# --- Service --------------------------------------------------------------------
+- name: Keycloak systemd unit
+  ansible.builtin.template:
+    src: keycloak.service.j2
+    dest: /etc/systemd/system/keycloak.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart Keycloak
+
+# Enable only: the handler below starts it exactly once. A start here plus a
+# handler restart would kill Keycloak while it creates its database schema.
+- name: Keycloak enabled at boot
+  ansible.builtin.systemd_service:
+    name: keycloak
+    enabled: true
+    daemon_reload: true
+
+- name: Apply Keycloak changes
+  ansible.builtin.meta: flush_handlers
+
+- name: Keycloak running
+  ansible.builtin.systemd_service:
+    name: keycloak
+    state: started
+
+# Runs on the node itself: traffic to its own IP uses loopback, not the firewall rules.
+- name: Wait until Keycloak is ready
+  ansible.builtin.uri:
+    url: "https://{{ ansible_host }}:{{ keycloak_management_port }}/health/ready"
+    ca_path: "{{ pki_remote_dir }}/ca.crt"
+  register: keycloak_ready
+  until: keycloak_ready.status == 200
+  retries: 60
+  delay: 5
+
+- name: Remove bootstrap credentials from disk
+  ansible.builtin.file:
+    path: "{{ keycloak_bootstrap_env }}"
+    state: absent
+
+- name: Remember that the bootstrap happened
+  ansible.builtin.copy:
+    dest: "{{ keycloak_bootstrap_marker }}"
+    content: ""
+    owner: root
+    group: root
+    mode: "0600"
+  when: inventory_hostname == groups['keycloak'] | first

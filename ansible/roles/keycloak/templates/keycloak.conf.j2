@@ -1,0 +1,39 @@
+# Managed by Ansible.
+
+# --- Build-time options ------------------------------------------------------
+{% for name, value in keycloak_build_options.items() %}
+{{ name }}={{ value }}
+{% endfor %}
+
+# --- Runtime options ---------------------------------------------------------
+# Database: TLS with server verification against the lab CA.
+db-url-host={{ groups['database'] | first }}
+db-url-database={{ keycloak_db_name }}
+db-username={{ keycloak_db_user }}
+db-password={{ vault_db_password }}
+db-tls-mode=verify-server
+db-tls-trust-store-file={{ pki_remote_dir }}/ca.crt
+
+# Public URL, used in tokens and redirects.
+hostname=https://{{ public_hostname }}
+
+# HTTPS only, on the private IP.
+http-enabled=false
+http-host={{ ansible_host }}
+https-port={{ keycloak_https_port }}
+https-certificate-file={{ pki_remote_dir }}/server.crt
+https-certificate-key-file={{ pki_remote_dir }}/server.key
+
+# Management interface (health, metrics): internal, HTTPS inherited from above.
+http-management-host={{ ansible_host }}
+http-management-port={{ keycloak_management_port }}
+
+# Trust X-Forwarded-* headers only when they come from the load balancer.
+proxy-headers=xforwarded
+proxy-trusted-addresses={{ groups['loadbalancer'] | map('extract', hostvars, 'ansible_host') | join(',') }}
+
+# Clustering: nodes find each other through the database (jdbc-ping).
+# Explicit bind address: the default could pick VirtualBox's NAT IP, identical on all VMs.
+cache=ispn
+cache-stack=jdbc-ping
+cache-embedded-network-bind-address={{ ansible_host }}
