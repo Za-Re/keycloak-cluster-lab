@@ -6,6 +6,10 @@ public_hostname: auth.lab.test
 keycloak_db_name: keycloak
 keycloak_db_user: keycloak
 
+# Shared by roles/keycloak (listens) and roles/haproxy (connects, health-checks).
+keycloak_https_port: 8443
+keycloak_management_port: 9000
+
 # Who may reach /admin/ and /realms/master/ through HAProxy.
 # 192.168.56.1 = the laptop's address on the VirtualBox host-only network.
 admin_allowed_cidrs:

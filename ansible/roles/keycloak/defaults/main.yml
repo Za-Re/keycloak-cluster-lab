@@ -14,8 +14,7 @@ keycloak_download_url: "https://github.com/keycloak/keycloak/releases/download/{
 # once against keycloak.org/keys (key 861AB50E...). Update with keycloak_version.
 keycloak_sha256: dd124787283918bc597628887168333465ee2a811a389e0003569e52be7e487f
 
-keycloak_https_port: 8443
-keycloak_management_port: 9000
+# keycloak_https_port / keycloak_management_port: group_vars/all (HAProxy needs them too).
 # jdbc-ping: 7800 data, 57800 failure detection (keycloak.org/server/caching)
 keycloak_cluster_ports: [7800, 57800]
 
