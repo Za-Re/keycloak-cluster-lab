@@ -1,0 +1,45 @@
+---
+# Restart Keycloak with no downtime: one node at a time, taken out of HAProxy first.
+# If a node fails, Ansible stops before touching the next one.
+- name: Rolling restart of Keycloak
+  hosts: keycloak
+  become: true
+  serial: 1
+  tasks:
+    # DRAIN: no new requests; waits until open connections finish, then MAINT.
+    - name: Take node out of HAProxy
+      community.general.haproxy:
+        state: disabled
+        drain: true
+        backend: be_keycloak
+        host: "{{ inventory_hostname }}"
+        socket: "{{ haproxy_admin_socket }}"
+        wait_interval: 2
+        wait_retries: 30
+      delegate_to: "{{ groups['loadbalancer'] | first }}"
+
+    - name: Restart Keycloak
+      ansible.builtin.systemd_service:
+        name: keycloak
+        state: restarted
+
+    - name: Wait until Keycloak is ready
+      ansible.builtin.uri:
+        url: "https://{{ ansible_host }}:{{ keycloak_management_port }}/health/ready"
+        ca_path: "{{ pki_remote_dir }}/ca.crt"
+      register: ready
+      until: ready.status == 200
+      retries: 60
+      delay: 5
+
+    # wait: continue only when HAProxy's own health checks say UP.
+    - name: Put node back into HAProxy
+      community.general.haproxy:
+        state: enabled
+        wait: true
+        backend: be_keycloak
+        host: "{{ inventory_hostname }}"
+        socket: "{{ haproxy_admin_socket }}"
+        wait_interval: 2
+        wait_retries: 30
+      delegate_to: "{{ groups['loadbalancer'] | first }}"

@@ -10,6 +10,9 @@ keycloak_db_user: keycloak
 keycloak_https_port: 8443
 keycloak_management_port: 9000
 
+# HAProxy admin socket on lb1: roles/haproxy creates it, rolling_restart.yml uses it.
+haproxy_admin_socket: /run/haproxy-admin.sock
+
 # Who may reach /admin/ and /realms/master/ through HAProxy.
 # 192.168.56.1 = the laptop's address on the VirtualBox host-only network.
 admin_allowed_cidrs:
