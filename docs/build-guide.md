@@ -13,7 +13,7 @@ the path. For day-to-day usage (setup, run, backup/restore) see the [README](../
 | 0 | VMs, Ansible base, secrets, PKI | ✅ |
 | 1 | Hardened base system + PostgreSQL | ✅ |
 | 2 | One Keycloak node (kc1) | ✅ |
-| 3 | Keycloak cluster + HAProxy | — |
+| 3 | Keycloak cluster + HAProxy | ✅ |
 | 4 | Keycloak configuration as code | — |
 | 5 | End-to-end tests + docs | — |
 
@@ -285,3 +285,80 @@ Expected: `getent` prints the alias, then `PGjdbcHostnameVerifier: Server name v
 - **`usename` isn't a typo:** PostgreSQL's column is spelled that way; `username` fails with `does not exist`.
 - **`[DEPRECATION WARNING]: community.general.yaml`:** use `callback_result_format = yaml` in
   `ansible.cfg` instead of `stdout_callback = yaml`.
+
+---
+
+## Phase 3: Cluster + HAProxy
+
+**Goal:** kc1 + kc2 form one cluster; HAProxy on lb1 is the only way in, over HTTPS, with
+re-encryption to verified Keycloak nodes, a path allowlist, and restarts without downtime.
+
+Built in small commits, one per step below.
+
+### What to add, in order
+
+| # | Piece | Why |
+|---|---|---|
+| 1 | `keycloak.conf.j2`: `cache-embedded-mtls-enabled=true`, `spi-sticky-session-encoder--infinispan--should-attach-route=false`, `shutdown-delay` (default `18s`) | Node-to-node traffic encrypted (default, stated explicitly). Sticky sessions not recommended since 26.6; `false` also silences the 26.8 deprecation warning. On stop the node reports not-ready but keeps serving, so HAProxy drops it first |
+| 2 | Run `site.yml` without `--limit` | kc2 joins. No new code: inventory, `pg_hba`, firewall and role were already generic |
+| 3 | Move `keycloak_https_port`, `keycloak_management_port` to `group_vars/all` | Role defaults are only visible to hosts running that role; lb1 needs the ports too |
+| 4 | `roles/haproxy`: defaults, handler (reload), template, tasks; play in `site.yml` after Keycloak | See "HAProxy config" below |
+| 5 | Path allowlist, `:80` → 301 to HTTPS, HSTS; ufw 80 + 443 | Only what browsers/apps need is public |
+| 6 | Admin socket (`haproxy_admin_socket` in `group_vars/all`) + `rolling_restart.yml` | Drain → restart → wait ready → enable, one node at a time (`serial: 1`) |
+
+### HAProxy config (2.8, checked against the 2.8 manual)
+
+- **TLS in:** Mozilla "intermediate" v6.0: TLS 1.2+, AEAD ciphers, `no-tls-tickets`; HTTP/2 via `alpn`.
+  Cert + key in one root-only `0600` PEM (HAProxy reads it as root, before switching user).
+- **Headers:** `http-request set-header` for `X-Forwarded-For/Proto/Host/Port`. `set-header` removes
+  the client's copy first, so they can't be spoofed. Keycloak trusts them only from lb1.
+- **TLS out:** `ssl verify required ca-file ca.crt` + `verifyhost kcN` per server, so the cert must be our CA's
+  **and** for that exact node. `verifyhost` also applies to health checks.
+- **Health:** `option httpchk GET /health/ready`, `check check-ssl port 9000 inter 5s fall 3 rise 2 slowstart 60s`.
+  `check-ssl` is required because `port` moves checks to another port. Down after 15 s → `shutdown-delay` must be longer.
+- **Balancing:** `roundrobin`, no stickiness. Sessions live in the cluster cache.
+- **Paths (keycloak.org/server/reverseproxy):** public `/realms/`, `/resources/`, `/.well-known/`;
+  `/admin/` and `/realms/master/` only from `admin_allowed_cidrs`; everything else 403.
+  Paths containing `..`, `//`, `%2e`, `%2f`, `%5c` get 400: Keycloak may normalize them into a path the
+  prefix check didn't see. (`normalize-uri` would be cleaner but is experimental in 2.8.)
+- **Safety:** `validate: haproxy -c -f %s` on the template; reload, not restart.
+
+### Run
+
+```bash
+ansible-playbook site.yml      # changed>0 (kc2, lb1)
+ansible-playbook site.yml      # changed=0
+ansible-playbook rolling_restart.yml
+```
+
+### Verify
+
+| Check | Command | Expected |
+|---|---|---|
+| Cluster of 2 | `ansible keycloak -b -m shell -a "journalctl -u keycloak --no-pager \| grep ISPN000094 \| tail -1 \| cut -c1-260"` | view ends with `(2) [kc1-..., kc2-...]` |
+| Issuer through HAProxy | `curl -s --cacert pki/ca.crt https://auth.lab.test/realms/master/.well-known/openid-configuration \| python3 -m json.tool \| grep issuer` | `https://auth.lab.test/realms/master` |
+| Old TLS refused | `curl -s --cacert pki/ca.crt --tlsv1.1 --tls-max 1.1 https://auth.lab.test/; echo $?` | `35` |
+| Backends healthy | `ansible lb1 -b -m shell -a "echo 'show stat' \| nc -U /run/haproxy-admin.sock \| cut -d, -f1,2,18 \| grep be_keycloak"` | kc1, kc2, BACKEND all `UP` |
+| Allowlist | `curl -s -o /dev/null -w '%{http_code}' --cacert pki/ca.crt --path-as-is https://auth.lab.test<path>` | `/` `/metrics` `/health/ready` → 403; `/realms//master/` `/realms/../admin/` → 400; `/admin/master/console/` → 200 from laptop |
+| Admin blocked elsewhere | `ansible kc1 -m shell -a "curl -s -o /dev/null -w '%{http_code}' --resolve auth.lab.test:443:192.168.56.10 https://auth.lab.test/admin/master/console/"` | `403` |
+| Redirect + HSTS | `curl -sI http://auth.lab.test/realms/x`; `curl -sI --cacert pki/ca.crt https://auth.lab.test/` | `301` to `https://`; `strict-transport-security: max-age=63072000` |
+| Temporary admin works | token request to `/realms/master/protocol/openid-connect/token` with `client_id=admin-cli` | `{"access_token":"eyJ...` |
+| Zero downtime | loop `curl` every 0.2 s printing non-200, while running `rolling_restart.yml` | no output |
+
+### Known gaps (accepted for now)
+
+- **No mTLS HAProxy → Keycloak.** Keycloak doesn't check who connects on 8443; firewall (only lb1) is the control.
+  Would need `https-client-auth` (build-time) and a `clientAuth` cert for lb1.
+- **Config changes restart all nodes at once:** the keycloak role's handler isn't rolling. In production:
+  apply config, then `rolling_restart.yml`.
+- **Auto-updates never run:** the bento box ships `apt-daily.timer` and `apt-daily-upgrade.timer` disabled, so
+  the Phase 1 unattended-upgrades config is correct but unused. Enabling them failed (`Job failed`); not fixed yet.
+
+### Pitfalls we hit
+
+- **apt lock error (`Could not get lock ... held by process`):** a cancelled `ansible-playbook` left `apt-get`
+  running on the VM. Wait for it to finish, then rerun.
+- **`curl` cleans up paths itself:** use `--path-as-is` to really send `..` and `//`.
+- **Servers start as UP in HAProxy:** absence of `DOWN` log lines isn't proof; ask the admin socket (`show stat`).
+- **kc2 re-downloaded the tarball once** (file newer than the install). Harmless: checksum verified,
+  unpack skipped via `creates:`, no restart.
