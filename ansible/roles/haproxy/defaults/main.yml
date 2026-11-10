@@ -1,0 +1,3 @@
+---
+# Certificate + private key in one PEM file (HAProxy's "crt" format).
+haproxy_cert: /etc/haproxy/server.pem

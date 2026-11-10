@@ -1,0 +1,46 @@
+# Managed by Ansible.
+
+global
+    log /dev/log local0
+    chroot /var/lib/haproxy
+    user haproxy
+    group haproxy
+    # Mozilla "intermediate" TLS profile (guidelines v6.0): TLS 1.2+, AEAD ciphers only.
+    ssl-default-bind-ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305
+    ssl-default-bind-ciphersuites TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256
+    ssl-default-bind-options ssl-min-ver TLSv1.2 no-tls-tickets
+
+defaults
+    mode http
+    log global
+    option httplog
+    timeout connect 5s
+    timeout client 30s
+    timeout server 30s
+    # Close clients that send their headers too slowly (slowloris).
+    timeout http-request 10s
+
+frontend fe_https
+    bind {{ ansible_host }}:443 ssl crt {{ haproxy_cert }} alpn h2,http/1.1
+    # set-header first removes any copy the client sent, so these can't be spoofed.
+    # Keycloak trusts them only from this host (proxy-trusted-addresses).
+    http-request set-header X-Forwarded-For %[src]
+    http-request set-header X-Forwarded-Proto https
+    http-request set-header X-Forwarded-Host {{ public_hostname }}
+    http-request set-header X-Forwarded-Port 443
+    default_backend be_keycloak
+
+backend be_keycloak
+    # No sticky sessions: Keycloak shares sessions through its cluster cache.
+    balance roundrobin
+    # Health: GET /health/ready on the management port.
+    option httpchk GET /health/ready
+    # Re-encrypt to Keycloak; "verify required" + our CA = only lab certs accepted.
+    # check-ssl: checks use TLS too (needed because "port" moves them to another port).
+    # inter 5s x fall 3 = 15s to mark a node down; keycloak_shutdown_delay must exceed it.
+    # slowstart: a node that just came back gets traffic gradually over 60s.
+    default-server ssl verify required ca-file {{ pki_remote_dir }}/ca.crt check check-ssl port {{ keycloak_management_port }} inter 5s fall 3 rise 2 slowstart 60s
+{% for host in groups['keycloak'] %}
+    # verifyhost: the cert must be for THIS node, not just any lab cert (checks too).
+    server {{ host }} {{ hostvars[host].ansible_host }}:{{ keycloak_https_port }} verifyhost {{ host }}
+{% endfor %}

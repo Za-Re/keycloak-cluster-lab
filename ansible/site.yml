@@ -22,3 +22,9 @@
   become: true
   roles:
     - keycloak
+
+- name: Load balancer (HAProxy in front of Keycloak)
+  hosts: loadbalancer
+  become: true
+  roles:
+    - haproxy

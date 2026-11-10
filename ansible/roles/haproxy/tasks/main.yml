@@ -1,0 +1,43 @@
+---
+# Ubuntu 24.04 ships HAProxy 2.8 (an LTS branch).
+- name: Install HAProxy
+  ansible.builtin.apt:
+    name: haproxy
+    state: present
+
+# HAProxy reads certificates as root at startup, before it switches to the
+# haproxy user, so root-only 0600 is enough. Built from the laptop's PKI files.
+- name: TLS certificate + key for HAProxy
+  ansible.builtin.copy:
+    dest: "{{ haproxy_cert }}"
+    content: |
+      {{ lookup('ansible.builtin.file', pki_dir ~ '/' ~ inventory_hostname ~ '.crt') }}
+      {{ lookup('ansible.builtin.file', pki_dir ~ '/' ~ inventory_hostname ~ '.key') }}
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+  notify: Reload HAProxy
+
+# validate: HAProxy checks the new file first; a broken config is never installed.
+- name: HAProxy configuration
+  ansible.builtin.template:
+    src: haproxy.cfg.j2
+    dest: /etc/haproxy/haproxy.cfg
+    owner: root
+    group: root
+    mode: "0644"
+    validate: haproxy -c -f %s
+  notify: Reload HAProxy
+
+- name: HAProxy running and enabled at boot
+  ansible.builtin.systemd_service:
+    name: haproxy
+    state: started
+    enabled: true
+
+- name: Firewall allows HTTPS
+  community.general.ufw:
+    rule: allow
+    port: "443"
+    proto: tcp
