@@ -36,8 +36,10 @@
     state: started
     enabled: true
 
-- name: Firewall allows HTTPS
+# 80 only redirects to 443.
+- name: Firewall allows HTTP and HTTPS
   community.general.ufw:
     rule: allow
-    port: "443"
+    port: "{{ item }}"
     proto: tcp
+  loop: ["80", "443"]

@@ -20,8 +20,30 @@ defaults
     # Close clients that send their headers too slowly (slowloris).
     timeout http-request 10s
 
+frontend fe_http
+    bind {{ ansible_host }}:80
+    # Plain HTTP only redirects; nothing is proxied unencrypted.
+    http-request redirect scheme https code 301
+
 frontend fe_https
     bind {{ ansible_host }}:443 ssl crt {{ haproxy_cert }} alpn h2,http/1.1
+
+    # --- Path allowlist (keycloak.org/server/reverseproxy) -------------------
+    # Block paths Keycloak might normalize into something our prefix checks
+    # don't see (e.g. /realms//master/, /realms/../admin/, %2e%2e).
+    http-request deny deny_status 400 if { path_sub -i .. // %2e %2f %5c }
+    acl from_admin_net src {{ admin_allowed_cidrs | join(' ') }}
+    acl admin_path path_beg /admin/ /realms/master/
+    acl public_path path_beg /realms/ /resources/ /.well-known/
+    # Admin console + master realm: admin network only. Everything not listed
+    # (/, /metrics, /health, ...) is 403.
+    http-request deny if admin_path !from_admin_net
+    http-request deny unless public_path or admin_path
+
+    # HSTS (2 years, Mozilla): browsers stop trying plain HTTP for this host.
+    # after-response: also added to HAProxy's own replies (403, 400).
+    http-after-response set-header Strict-Transport-Security "max-age=63072000"
+
     # set-header first removes any copy the client sent, so these can't be spoofed.
     # Keycloak trusts them only from this host (proxy-trusted-addresses).
     http-request set-header X-Forwarded-For %[src]
