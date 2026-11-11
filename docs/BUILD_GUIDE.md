@@ -15,7 +15,7 @@ the path. For day-to-day usage (setup, run, backup/restore) see the [README](../
 | 2 | One Keycloak node (kc1) | ✅ |
 | 3 | Keycloak cluster + HAProxy | ✅ |
 | 4 | Keycloak configuration as code | ✅ |
-| 5 | End-to-end tests + docs | — |
+| 5 | End-to-end tests + docs | 🔄 |
 
 Commands starting with `ansible` run in `ansible/`; `vagrant` commands run in `vagrant/`.
 
@@ -444,3 +444,53 @@ there's no "proceed anyway" button. Remove it after the lab (`certutil ... -D -n
 - **keycloak_user doesn't compare passwords:** changing `vault_kc_admin_password` later won't update Keycloak.
 - **`admin-cli` tokens have no `email` or roles:** it issues lightweight access tokens (only `sub`, `sid`,
   `exp`…). Check users and roles via the admin API, and app tokens via `evaluate-scopes`.
+
+---
+
+## Phase 5: End-to-end tests + docs
+
+**Goal:** prove the whole chain with a real app, check every security boundary from outside,
+lint the code, and write it down. Almost no new code: this phase is mostly tests.
+
+### What to add, in order
+
+| # | Piece | Why |
+|---|---|---|
+| 1 | hello-app `.env`: `OIDC_ISSUER=https://auth.lab.test/realms/demo`, `OIDC_CLIENT_SECRET` = `vault_kc_fastapi_client_secret` | Points the existing app at the cluster; no app code changes |
+| 2 | Start the app with `SSL_CERT_FILE=<repo>/ansible/pki/ca.crt uvicorn app.main:app --port 8000` | httpx trusts only certifi; `SSL_CERT_FILE` (httpx ≥ 0.28 reads it) makes it trust the lab CA |
+| 3 | `ansible/.ansible-lint` (`exclude_paths: [collections/]`) | Installed collections are third-party code with test playbooks that can't pass syntax-check |
+| 4 | `ansible/.ansible-lint-ignore`: `args[module]` for the two `keycloak_config` task files | False positive: lint doesn't see `auth_keycloak_url` from `module_defaults`. Scoped to 2 files, not global |
+| 5 | Fix findings: trailing spaces, task names capitalized, `{{ tenant }}` at the **end** of names, `# noqa: no-handler` on the PGDG apt refresh | A handler would run at the end of the play; the install right after needs the fresh cache |
+| 6 | HAProxy: `acl admin_path path /admin` (exact) | `/admin` without slash matched neither ACL → 403 |
+| 7 | `docs/FAILOVER.md` | Failover, rolling restart and restore tests, run once everything is built |
+
+Run `ansible-lint` in `ansible/` after **every** change, not only at the end (install: `sudo apt install ansible-lint`, matches apt's ansible-core).
+
+### Verify
+
+| Check | Command | Expected |
+|---|---|---|
+| Lint | `ansible-lint` | `Passed: 0 failure(s)`, profile `production` |
+| Idempotency | `ansible-playbook site.yml` twice | `changed=0` on every host |
+| Cluster view | `vagrant ssh kc1 -c "sudo journalctl -u keycloak \| grep ISPN000094 \| tail -n 1"` | `(2) [kc1-..., kc2-...]` |
+| App login | browser `http://localhost:8000/helloZara` → login as `demo-user` | greeting with role `hello-reader`; `/logout` shows Keycloak's confirm page |
+| Admin from laptop | `curl -s -o /dev/null -w '%{http_code}\n' --cacert pki/ca.crt https://auth.lab.test/admin/` (and `/admin`) | `302` |
+| Admin from elsewhere | same from kc1 with `--resolve auth.lab.test:443:192.168.56.10` for `/admin`, `/admin/`, `/realms/master/` | `403` |
+| Nodes not reachable directly | `curl -m 3 ... https://192.168.56.21:{8443,9000}/health/ready` from the laptop | `000` (timeout, ufw drops) |
+| DB refuses lb1 | `vagrant ssh lb1 -c "timeout 3 bash -c '</dev/tcp/192.168.56.11/5432'"` | fails (ufw) |
+| DB refuses no TLS | on kc1 (temporary `postgresql-client`): `psql 'host=db1 dbname=keycloak user=keycloak sslmode=disable'` | `pg_hba.conf rejects connection ... no encryption` |
+| DB accepts TLS | same with `sslmode=verify-full sslrootcert=/etc/ssl/lab/ca.crt` | password prompt |
+
+Failover, rolling restart and backup/restore: [FAILOVER.md](FAILOVER.md).
+
+### Pitfalls we hit
+
+- **`SSL_CERT_FILE` in `.env` does nothing:** pydantic-settings reads `.env` into the app's settings
+  only, it doesn't export environment variables. Set it in the shell that starts uvicorn.
+- **Each browser has its own trust store:** Chrome on Linux uses `~/.pki/nssdb`, Firefox (and snap
+  browsers) their own. Restart the browser fully after importing. `certutil -L` without
+  `-d sql:$HOME/.pki/nssdb` fails with `SEC_ERROR_BAD_DATABASE` (wrong database, not a failed import).
+- **Account console ≠ admin console:** `/realms/master/account` is every user's self-service page
+  (profile, 2FA). The admin UI is `/admin/` → `/admin/master/console/`.
+- **ansible-lint scans everything under the project**, including `collections/` (4000+ files) → exclude it.
+- **Test with the exact URLs people type:** curl tested `/admin/`, the browser used `/admin` → 403.

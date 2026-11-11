@@ -84,3 +84,20 @@ vagrant ssh db1 -c "sudo systemctl stop postgresql"
 Expected: new logins and admin changes fail (single PostgreSQL, no HA).
 `/health/ready` on the Keycloak nodes reports the database check down.
 Start it again with `sudo systemctl start postgresql`; Keycloak reconnects without a restart.
+
+## 6. Data lost: restore from backup
+
+Proves a backup can actually be restored: take a dump, change something, restore, the change is gone.
+
+1. Take a backup now and note the file name:
+   ```bash
+   vagrant ssh db1 -c "sudo systemctl start keycloak-db-backup.service && sudo ls -l /var/backups/keycloak/"
+   ```
+   Expected: a new `keycloak-<UTC time>.dump`, `-rw------- postgres`.
+2. Change something **after** the backup: admin console → realm `demo` → Users → add user `restore-test`.
+3. Restore the dump from step 1 with the README procedure (README → Database → Restore):
+   stop Keycloak on all nodes → `dropdb` / `createdb` / `pg_restore` on db1 → start Keycloak.
+4. Wait until both nodes are back (`ISPN000094 ... (2)`, see scenario 1), then check:
+   - admin console → `demo` → Users: `restore-test` is **gone**, `demo-user` is still there
+   - hello-app `/login` as `demo-user` works
+5. `ansible-playbook site.yml` → `changed=0` (the restored data matches the code).
