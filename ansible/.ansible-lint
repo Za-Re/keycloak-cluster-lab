@@ -1,0 +1,4 @@
+---
+# Installed collections (collections_path in ansible.cfg) are third-party code, not ours.
+exclude_paths:
+  - collections/

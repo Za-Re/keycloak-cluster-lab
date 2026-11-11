@@ -5,8 +5,8 @@
     cache_valid_time: 3600
     upgrade: dist
 
-# Installs Chrony, sets the timezone, and enables the time 
-# synchronization service. Consistent clocks matter for TLS 
+# Installs Chrony, sets the timezone, and enables the time
+# synchronization service. Consistent clocks matter for TLS
 # certificates, token expiration, and cluster health checks.
 - name: Base packages
   ansible.builtin.apt:
@@ -34,7 +34,7 @@
     group: root
     mode: "0644"
 
-# Read after Ubuntu's 50unattended-upgrades: clear its origin 
+# Read after Ubuntu's 50unattended-upgrades: clear its origin
 # lists and allow only the -security pocket.
 # No automatic reboot (would hit all kc nodes at once).
 - name: Restrict unattended upgrades to security updates
@@ -74,7 +74,7 @@
   notify: Reload sshd
 
 # --- Firewall ------------------------------------------------------------
-# Allow SSH BEFORE enabling ufw, or enabling it would cut our 
+# Allow SSH BEFORE enabling ufw, or enabling it would cut our
 # own connection.
 - name: Firewall allows SSH
   community.general.ufw:
@@ -82,7 +82,7 @@
     port: "22"
     proto: tcp
 
-# Default deny incoming: every other port stays closed unless 
+# Default deny incoming: every other port stays closed unless
 # a role opens it.
 - name: Firewall on, deny incoming by default
   community.general.ufw:
@@ -91,7 +91,7 @@
     default: deny
 
 # --- Name resolution between lab hosts ---------------------------------------
-# Adds every Ansible inventory host to /etc/hosts. This lets VMs communicate 
+# Adds every Ansible inventory host to /etc/hosts. This lets VMs communicate
 # using stable names instead of IP addresses, even without a DNS server.
 - name: Lab hosts in /etc/hosts
   ansible.builtin.blockinfile:

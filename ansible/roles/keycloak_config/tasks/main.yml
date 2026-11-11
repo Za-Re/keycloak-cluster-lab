@@ -49,7 +49,7 @@
       auth_password: "{{ keycloak_config_use_client | ternary(omit, vault_kc_bootstrap_admin_password) }}"
   block:
     # Service account only: no browser login, no password grant.
-    - name: master | ansible-admin client (Ansible's service account)
+    - name: Master | ansible-admin client (Ansible's service account)
       community.general.keycloak_client:
         realm: master
         client_id: "{{ keycloak_config_client_id }}"
@@ -69,7 +69,7 @@
       no_log: true
 
     # Realm role "admin" in master = may manage all realms.
-    - name: master | ansible-admin may administer Keycloak
+    - name: Master | ansible-admin may administer Keycloak
       community.general.keycloak_user_rolemapping:
         realm: master
         service_account_user_client_id: "{{ keycloak_config_client_id }}"
@@ -79,7 +79,7 @@
       no_log: true
 
     # Lock accounts after repeated failed logins (Keycloak's default thresholds).
-    - name: master | brute-force protection
+    - name: Master | brute-force protection
       community.general.keycloak_realm:
         realm: master
         brute_force_protected: true
@@ -90,7 +90,7 @@
     # authenticator app, so this account always has MFA.
     # The password is only sent when the user is created or updated; changing it
     # in the vault later does not change it in Keycloak.
-    - name: master | permanent admin user
+    - name: Master | permanent admin user
       community.general.keycloak_user:
         realm: master
         username: "{{ keycloak_config_admin_user }}"
@@ -104,7 +104,7 @@
         state: present
       no_log: true
 
-    - name: master | permanent admin has the admin role
+    - name: Master | permanent admin has the admin role
       community.general.keycloak_user_rolemapping:
         realm: master
         target_username: "{{ keycloak_config_admin_user }}"
@@ -122,7 +122,7 @@
 
     # KEEP LAST: on a first run every task above logs in as temp-admin.
     # roles/keycloak's marker file stops it from being recreated.
-    - name: master | delete the temporary bootstrap admin
+    - name: Master | delete the temporary bootstrap admin
       community.general.keycloak_user:
         realm: master
         username: "{{ keycloak_bootstrap_admin_user }}"

@@ -1,0 +1,3 @@
+# auth_keycloak_url comes from module_defaults in keycloak_config/tasks/main.yml; lint can't see that.
+roles/keycloak_config/tasks/main.yml args[module]
+roles/keycloak_config/tasks/tenant.yml args[module]

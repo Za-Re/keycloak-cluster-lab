@@ -1,7 +1,7 @@
 ---
 # Everything for ONE tenant realm. Included once per entry in keycloak_config_tenants;
 # the login comes from module_defaults in main.yml.
-- name: "{{ tenant }} | realm and its security settings"
+- name: "Realm and its security settings | {{ tenant }}"
   community.general.keycloak_realm:
     realm: "{{ tenant }}"
     id: "{{ tenant }}"
@@ -29,7 +29,7 @@
   no_log: true
 
 # The role that hello-app checks (REQUIRED_ROLE=hello-reader).
-- name: "{{ tenant }} | realm role hello-reader"
+- name: "Realm role hello-reader | {{ tenant }}"
   community.general.keycloak_role:
     realm: "{{ tenant }}"
     name: hello-reader
@@ -39,7 +39,7 @@
 
 # Test user. First/last name filled so the first login doesn't stop at
 # "update your profile"
-- name: "{{ tenant }} | test user demo-user"
+- name: "Test user demo-user | {{ tenant }}"
   community.general.keycloak_user:
     realm: "{{ tenant }}"
     username: demo-user
@@ -55,7 +55,7 @@
     state: present
   no_log: true
 
-- name: "{{ tenant }} | demo-user has hello-reader"
+- name: "Grant hello-reader to demo-user | {{ tenant }}"
   community.general.keycloak_user_rolemapping:
     realm: "{{ tenant }}"
     target_username: demo-user
@@ -65,7 +65,7 @@
   no_log: true
 
 # hello-app's client (has a secret, the app runs server-side).
-- name: "{{ tenant }} | client fastapi-app"
+- name: "Client fastapi-app | {{ tenant }}"
   community.general.keycloak_client:
     realm: "{{ tenant }}"
     client_id: fastapi-app
@@ -105,7 +105,7 @@
   no_log: true
 
 # With full scope off, this is the only realm role that can appear in its tokens.
-- name: "{{ tenant }} | fastapi-app may only see hello-reader"
+- name: "Limit fastapi-app tokens to hello-reader | {{ tenant }}"
   community.general.keycloak_client_rolescope:
     realm: "{{ tenant }}"
     client_id: fastapi-app

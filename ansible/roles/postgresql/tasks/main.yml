@@ -45,7 +45,7 @@
     signed_by: "{{ postgresql_pgdg_key_file }}"
   register: postgresql_pgdg_repo
 
-- name: Refresh apt after adding the repository
+- name: Refresh apt after adding the repository # noqa: no-handler
   ansible.builtin.apt:
     update_cache: true
   when: postgresql_pgdg_repo.changed
