@@ -27,3 +27,39 @@
       adminEventsExpiration: "{{ keycloak_config_events_expiration | string }}"
     state: present
   no_log: true
+
+# The role that hello-app checks (REQUIRED_ROLE=hello-reader).
+- name: "{{ tenant }} | realm role hello-reader"
+  community.general.keycloak_role:
+    realm: "{{ tenant }}"
+    name: hello-reader
+    description: May use the hello-app
+    state: present
+  no_log: true
+
+# Test user. First/last name filled so the first login doesn't stop at
+# "update your profile"
+- name: "{{ tenant }} | test user demo-user"
+  community.general.keycloak_user:
+    realm: "{{ tenant }}"
+    username: demo-user
+    email: user.demo@example.com
+    email_verified: true
+    first_name: Demo
+    last_name: User
+    enabled: true
+    credentials:
+      - type: password
+        value: "{{ vault_kc_test_user_password }}"
+        temporary: false
+    state: present
+  no_log: true
+
+- name: "{{ tenant }} | demo-user has hello-reader"
+  community.general.keycloak_user_rolemapping:
+    realm: "{{ tenant }}"
+    target_username: demo-user
+    roles:
+      - name: hello-reader
+    state: present
+  no_log: true
