@@ -63,3 +63,53 @@
       - name: hello-reader
     state: present
   no_log: true
+
+# hello-app's client (has a secret, the app runs server-side).
+- name: "{{ tenant }} | client fastapi-app"
+  community.general.keycloak_client:
+    realm: "{{ tenant }}"
+    client_id: fastapi-app
+    enabled: true
+    public_client: false
+    client_authenticator_type: client-secret
+    secret: "{{ vault_kc_fastapi_client_secret }}"
+    # Browser login (authorization code) only: no password grant, no implicit,
+    # no service account.
+    standard_flow_enabled: true
+    direct_access_grants_enabled: false
+    implicit_flow_enabled: false
+    service_accounts_enabled: false
+    # Exact URIs, no wildcards: Keycloak only redirects back to these.
+    redirect_uris:
+      - http://localhost:8000/callback
+    attributes:
+      post.logout.redirect.uris: http://localhost:8000/
+      # Reject any authorization request without a S256 PKCE challenge.
+      pkce.code.challenge.method: S256
+    # Off: tokens carry only roles explicitly allowed below, not every role the user has.
+    full_scope_allowed: false
+    protocol_mappers:
+      # Tells the app which tenant (realm) the user logged in to.
+      - name: tenant
+        protocol: openid-connect
+        protocolMapper: oidc-hardcoded-claim-mapper
+        config:
+          claim.name: tenant
+          claim.value: "{{ tenant }}"
+          jsonType.label: String
+          access.token.claim: "true"
+          id.token.claim: "true"
+          userinfo.token.claim: "true"
+          introspection.token.claim: "true"
+    state: present
+  no_log: true
+
+# With full scope off, this is the only realm role that can appear in its tokens.
+- name: "{{ tenant }} | fastapi-app may only see hello-reader"
+  community.general.keycloak_client_rolescope:
+    realm: "{{ tenant }}"
+    client_id: fastapi-app
+    role_names:
+      - hello-reader
+    state: present
+  no_log: true
