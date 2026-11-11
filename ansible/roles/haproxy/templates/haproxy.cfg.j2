@@ -36,6 +36,7 @@ frontend fe_https
     http-request deny deny_status 400 if { path_sub -i .. // %2e %2f %5c }
     acl from_admin_net src {{ admin_allowed_cidrs | join(' ') }}
     acl admin_path path_beg /admin/ /realms/master/
+    acl admin_path path /admin
     acl public_path path_beg /realms/ /resources/ /.well-known/
     # Admin console + master realm: admin network only. Everything not listed
     # (/, /metrics, /health, ...) is 403.
