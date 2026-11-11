@@ -9,3 +9,12 @@ keycloak_config_client_id: ansible-admin
 
 # Permanent human admin in master. Password: vault_kc_admin_password.
 keycloak_config_admin_user: admin
+
+# One realm per tenant, all configured the same way.
+keycloak_config_tenants: [demo, tenant-a, tenant-b]
+
+# Realm settings (names checked against /admin/serverinfo).
+# Policy ids: length, notUsername, passwordHistory.
+keycloak_config_password_policy: "length(12) and notUsername and passwordHistory(3)"
+keycloak_config_access_token_lifespan: 300      # seconds (5 min)
+keycloak_config_events_expiration: 604800       # seconds (7 days), login + admin events

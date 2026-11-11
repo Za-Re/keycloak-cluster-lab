@@ -113,6 +113,13 @@
         state: present
       no_log: true
 
+    # Tasks inside the included file inherit this block's module_defaults (login).
+    - name: Tenant realms
+      ansible.builtin.include_tasks: tenant.yml
+      loop: "{{ keycloak_config_tenants }}"
+      loop_control:
+        loop_var: tenant
+
     # KEEP LAST: on a first run every task above logs in as temp-admin.
     # roles/keycloak's marker file stops it from being recreated.
     - name: master | delete the temporary bootstrap admin

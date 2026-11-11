@@ -1,0 +1,29 @@
+---
+# Everything for ONE tenant realm. Included once per entry in keycloak_config_tenants;
+# the login comes from module_defaults in main.yml.
+- name: "{{ tenant }} | realm and its security settings"
+  community.general.keycloak_realm:
+    realm: "{{ tenant }}"
+    id: "{{ tenant }}"
+    enabled: true
+    # HTTPS for every request, even from private IPs (default "external" allows HTTP there).
+    ssl_required: all
+    registration_allowed: false
+    brute_force_protected: true
+    password_policy: "{{ keycloak_config_password_policy }}"
+    access_token_lifespan: "{{ keycloak_config_access_token_lifespan }}"
+    # Refresh token rotation: each refresh token works once; reusing it fails
+    # (a stolen, already-used token is detected).
+    revoke_refresh_token: true
+    refresh_token_max_reuse: 0
+    # Login events (logins, failures) and admin events (config changes), auto-deleted.
+    # Admin event "details" stay off: they can contain secrets.
+    events_enabled: true
+    events_expiration: "{{ keycloak_config_events_expiration }}"
+    admin_events_enabled: true
+    admin_events_details_enabled: false
+    attributes:
+      # No module option for this; realm attribute name from Keycloak's RealmAttributes.java.
+      adminEventsExpiration: "{{ keycloak_config_events_expiration | string }}"
+    state: present
+  no_log: true

@@ -14,7 +14,7 @@ the path. For day-to-day usage (setup, run, backup/restore) see the [README](../
 | 1 | Hardened base system + PostgreSQL | ✅ |
 | 2 | One Keycloak node (kc1) | ✅ |
 | 3 | Keycloak cluster + HAProxy | ✅ |
-| 4 | Keycloak configuration as code | — |
+| 4 | Keycloak configuration as code | 🚧 |
 | 5 | End-to-end tests + docs | — |
 
 Commands starting with `ansible` run in `ansible/`; `vagrant` commands run in `vagrant/`.
@@ -362,3 +362,68 @@ ansible-playbook rolling_restart.yml
 - **Servers start as UP in HAProxy:** absence of `DOWN` log lines isn't proof; ask the admin socket (`show stat`).
 - **kc2 re-downloaded the tarball once** (file newer than the install). Harmless: checksum verified,
   unpack skipped via `creates:`, no restart.
+
+---
+
+## Phase 4: Configuration as code (in progress)
+
+**Goal:** everything inside Keycloak (admins, realms, roles, users, clients) defined in Ansible,
+idempotent, driven by variables. `roles/keycloak_config`, using `community.general.keycloak_*` modules.
+
+### Design decisions
+
+- **Ansible gets its own identity:** client `ansible-admin` in `master` with a service account
+  (client-credentials grant, realm role `admin`). The human admin has TOTP, which Ansible can't type.
+  Secret: `vault_kc_ansible_client_secret`. Production would add least privilege and a secret manager.
+- **Runs on the first kc node** (`hosts: keycloak[0]`), against `https://kc1:8443`. The modules
+  verify TLS only with the system trust store (no CA-file option); kc1 has the lab CA, the laptop doesn't.
+  No `become`: API calls don't need root. Once is enough: config lives in the shared database.
+- **One login block:** `module_defaults` for `group/community.general.keycloak` sets the auth
+  parameters for every module. `omit` works inside `module_defaults` (tested).
+- **Bootstrap fallback:** the role tests "does ansible-admin get a token **and** does the admin API
+  accept it?". If not (first run), it logs in as `temp-admin` to create/fix `ansible-admin`.
+  Deleting `temp-admin` is the **last** task, so a first run never cuts off its own login.
+
+### What to add, in order
+
+| # | Piece | Why |
+|---|---|---|
+| 1 | `group_vars/all`: `keycloak_bootstrap_admin_user` (moved from roles/keycloak) | Both roles need it |
+| 2 | `vault.yml` + `.example`: `vault_kc_ansible_client_secret` | Ansible's client secret |
+| 3 | `defaults`: `keycloak_config_url`, `keycloak_config_client_id`, `keycloak_config_admin_user` | |
+| 4 | Login check: token request (`uri`, `status_code: [200, 401]`) → admin API call with it → `set_fact` | Chooses ansible-admin or the temp-admin fallback |
+| 5 | `ansible-admin` client: confidential, service account only, default scope `kc-admin-api` (`client_scopes_behavior: patch`) + realm role `admin` | Automation identity |
+| 6 | master: `brute_force_protected: true` | Lock accounts after repeated failures |
+| 7 | master: user `admin`, password from vault, `required_actions: [CONFIGURE_TOTP]`, realm role `admin` | Human admin, MFA enforced on first login |
+| 8 | Delete `temp-admin` (last task) | Temporary account gone |
+| 9 | `site.yml`: play `keycloak_config` on `keycloak[0]` | After HAProxy |
+
+All tasks touching secrets have `no_log: true` (including those that only inherit the login from `module_defaults`).
+
+### Verify (so far)
+
+| Check | Expected |
+|---|---|
+| Second run | `keycloak_config_use_client: true`, `changed=0` |
+| ansible-admin token roles (decode JWT payload) | contains `admin` |
+| Password grant as `temp-admin` | `Invalid user credentials` (deleted) |
+| Password grant as `admin` (correct password) | `Account is not fully set up` (TOTP pending; a wrong password would say "Invalid user credentials") |
+| `GET /admin/realms/master` with ansible-admin token | `bruteForceProtected: True` |
+| Browser `https://auth.lab.test/admin/` as `admin` | QR code for TOTP, then the console |
+
+**Browser trust:** import `ansible/pki/ca.crt` as an authority (Chrome: `chrome://certificate-manager/`,
+or `certutil -d sql:$HOME/.pki/nssdb -A -t "C,," -n "Keycloak Lab CA" -i pki/ca.crt`). HSTS means
+there's no "proceed anyway" button. Remove it after the lab (`certutil ... -D -n "Keycloak Lab CA"`).
+
+### Pitfalls we hit
+
+- **26.8.2 admin API audience check:** a valid `ansible-admin` token still got `401` on `/admin/...`.
+  Since 26.8.2 tokens need the `kc-admin-api` client scope; only built-in clients (`admin-cli`, admin
+  console) get it on upgrade (upgrading guide, 26.8.2 breaking changes). Lesson: test with a real admin
+  call, not just "got a token".
+- **`no_log` hides the error:** rerun the failing module ad hoc in check mode (`ansible kc1 -C -m ...`) to see it.
+- **A wrong client secret also gives 401**, so it falls back to `temp-admin`; once that's deleted, a
+  "temp-admin login failed" error usually means `vault_kc_ansible_client_secret` doesn't match.
+- **Ran outside `ansible/`:** `ansible-vault` asked for a password and `kc1` was unknown, because `ansible.cfg` wasn't read.
+- **Stray `gpg/` + `dummy-repo.gpg` in `ansible/`** (a throwaway test key incl. private keys): not ours, never commit, deleted.
+- **keycloak_user doesn't compare passwords:** changing `vault_kc_admin_password` later won't update Keycloak.
