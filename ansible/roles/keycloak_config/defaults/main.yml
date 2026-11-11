@@ -6,3 +6,6 @@ keycloak_config_url: "https://{{ inventory_hostname }}:{{ keycloak_https_port }}
 # Ansible's own identity in the master realm (client credentials, no human login).
 # Secret: vault_kc_ansible_client_secret.
 keycloak_config_client_id: ansible-admin
+
+# Permanent human admin in master. Password: vault_kc_admin_password.
+keycloak_config_admin_user: admin
