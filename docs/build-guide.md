@@ -14,7 +14,7 @@ the path. For day-to-day usage (setup, run, backup/restore) see the [README](../
 | 1 | Hardened base system + PostgreSQL | ✅ |
 | 2 | One Keycloak node (kc1) | ✅ |
 | 3 | Keycloak cluster + HAProxy | ✅ |
-| 4 | Keycloak configuration as code | 🚧 |
+| 4 | Keycloak configuration as code | ✅ |
 | 5 | End-to-end tests + docs | — |
 
 Commands starting with `ansible` run in `ansible/`; `vagrant` commands run in `vagrant/`.
@@ -365,7 +365,7 @@ ansible-playbook rolling_restart.yml
 
 ---
 
-## Phase 4: Configuration as code (in progress)
+## Phase 4: Configuration as code
 
 **Goal:** everything inside Keycloak (admins, realms, roles, users, clients) defined in Ansible,
 idempotent, driven by variables. `roles/keycloak_config`, using `community.general.keycloak_*` modules.
@@ -395,21 +395,38 @@ idempotent, driven by variables. `roles/keycloak_config`, using `community.gener
 | 5 | `ansible-admin` client: confidential, service account only, default scope `kc-admin-api` (`client_scopes_behavior: patch`) + realm role `admin` | Automation identity |
 | 6 | master: `brute_force_protected: true` | Lock accounts after repeated failures |
 | 7 | master: user `admin`, password from vault, `required_actions: [CONFIGURE_TOTP]`, realm role `admin` | Human admin, MFA enforced on first login |
-| 8 | Delete `temp-admin` (last task) | Temporary account gone |
-| 9 | `site.yml`: play `keycloak_config` on `keycloak[0]` | After HAProxy |
+| 8 | `defaults`: `keycloak_config_tenants` (`demo`, `tenant-a`, `tenant-b`), password policy, token lifespan, events expiration | Everything per-tenant is driven by these |
+| 9 | `tasks/tenant.yml`, included per tenant (`loop_var: tenant`) inside the login block | Included tasks inherit `module_defaults` |
+| 10 | Realm: `ssl_required: all`, no registration, brute force, policy `length(12) and notUsername and passwordHistory(3)`, access token 300 s, `revoke_refresh_token` + `refresh_token_max_reuse: 0`, login + admin events with 7-day expiry (`attributes.adminEventsExpiration`, no module option), admin event details off (may contain secrets) | Realm hardening from the spec. Policy ids checked in `/admin/serverinfo` |
+| 11 | Realm role `hello-reader`; user `demo-user` (verified email, first/last name, vault password) with that role | First/last name avoid an "update profile" stop on first login |
+| 12 | Client `fastapi-app`: confidential, standard flow only, `pkce.code.challenge.method: S256`, exact `redirect_uris` + `post.logout.redirect.uris`, `full_scope_allowed: false`, hardcoded `tenant` claim mapper | Matches the hello-app (PKCE S256, roles from `realm_access` in the access token, logout redirect) |
+| 13 | `keycloak_client_rolescope` (no `client_scope_id` = realm roles): only `hello-reader` | With full scope off, the only role that can reach its tokens |
+| 14 | Delete `temp-admin` (**last** task in main.yml) | Temporary account gone |
+| 15 | `site.yml`: play `keycloak_config` on `keycloak[0]` | After HAProxy |
 
 All tasks touching secrets have `no_log: true` (including those that only inherit the login from `module_defaults`).
 
-### Verify (so far)
+Attribute and mapper names checked in the 26.8.2 source: `OIDCConfigAttributes.java`
+(`pkce.code.challenge.method`, `post.logout.redirect.uris`), `HardcodedClaim.java`
+(`oidc-hardcoded-claim-mapper`, `claim.value`), `OIDCAttributeMapperHelper.java` (`claim.name`,
+`jsonType.label`, `*.token.claim`), `RealmAttributes.java` (`adminEventsExpiration`).
+
+### Verify
 
 | Check | Expected |
 |---|---|
-| Second run | `keycloak_config_use_client: true`, `changed=0` |
+| Rerun | `keycloak_config_use_client: true`, `changed=0` |
 | ansible-admin token roles (decode JWT payload) | contains `admin` |
 | Password grant as `temp-admin` | `Invalid user credentials` (deleted) |
 | Password grant as `admin` (correct password) | `Account is not fully set up` (TOTP pending; a wrong password would say "Invalid user credentials") |
 | `GET /admin/realms/master` with ansible-admin token | `bruteForceProtected: True` |
 | Browser `https://auth.lab.test/admin/` as `admin` | QR code for TOTP, then the console |
+| Realm settings via `GET /admin/realms/<tenant>` | `sslRequired all`, policy, `accessTokenLifespan 300`, `revokeRefreshToken true`, events on, `adminEventsExpiration 604800`; Keycloak's own attributes still present |
+| `demo-user` via admin API (`users?username=demo-user&exact=true`, `role-mappings/realm`) | email verified, no required actions, roles `hello-reader` + `default-roles-<tenant>` |
+| Example token: `clients/<id>/evaluate-scopes/generate-example-access-token?userId=<id>&scope=openid profile email` | `iss` = `https://auth.lab.test/realms/<tenant>`, `tenant` = realm name, `realm_access.roles` = **only** `hello-reader`, `email` present |
+| Password grant on `fastapi-app` | `unauthorized_client` / `invalid_client` |
+| `/auth` without `code_challenge` | redirect with `error=invalid_request` (`code_challenge_method` missing) |
+| `/auth` with another `redirect_uri` | `Invalid parameter: redirect_uri` |
 
 **Browser trust:** import `ansible/pki/ca.crt` as an authority (Chrome: `chrome://certificate-manager/`,
 or `certutil -d sql:$HOME/.pki/nssdb -A -t "C,," -n "Keycloak Lab CA" -i pki/ca.crt`). HSTS means
@@ -424,6 +441,6 @@ there's no "proceed anyway" button. Remove it after the lab (`certutil ... -D -n
 - **`no_log` hides the error:** rerun the failing module ad hoc in check mode (`ansible kc1 -C -m ...`) to see it.
 - **A wrong client secret also gives 401**, so it falls back to `temp-admin`; once that's deleted, a
   "temp-admin login failed" error usually means `vault_kc_ansible_client_secret` doesn't match.
-- **Ran outside `ansible/`:** `ansible-vault` asked for a password and `kc1` was unknown, because `ansible.cfg` wasn't read.
-- **Stray `gpg/` + `dummy-repo.gpg` in `ansible/`** (a throwaway test key incl. private keys): not ours, never commit, deleted.
 - **keycloak_user doesn't compare passwords:** changing `vault_kc_admin_password` later won't update Keycloak.
+- **`admin-cli` tokens have no `email` or roles:** it issues lightweight access tokens (only `sub`, `sid`,
+  `exp`…). Check users and roles via the admin API, and app tokens via `evaluate-scopes`.
