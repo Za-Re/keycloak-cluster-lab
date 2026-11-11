@@ -10,6 +10,10 @@ keycloak_db_user: keycloak
 keycloak_https_port: 8443
 keycloak_management_port: 9000
 
+# Temporary admin: roles/keycloak creates it on the first start,
+# roles/keycloak_config uses it once to create ansible-admin, then deletes it.
+keycloak_bootstrap_admin_user: temp-admin
+
 # HAProxy admin socket on lb1: roles/haproxy creates it, rolling_restart.yml uses it.
 haproxy_admin_socket: /run/haproxy-admin.sock
 

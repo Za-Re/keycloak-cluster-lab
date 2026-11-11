@@ -22,8 +22,7 @@ keycloak_cluster_ports: [7800, 57800]
 # drops the node first. Must exceed HAProxy's detection time (inter 5s x fall 3 = 15s).
 keycloak_shutdown_delay: 18s
 
-# Temporary admin for the first start; roles/keycloak_config replaces and deletes it.
-keycloak_bootstrap_admin_user: temp-admin
+# Temporary admin for the first start: name in group_vars/all (keycloak_config needs it too).
 keycloak_bootstrap_env: /etc/keycloak/bootstrap.env
 keycloak_bootstrap_marker: /etc/keycloak/.bootstrap-done
 

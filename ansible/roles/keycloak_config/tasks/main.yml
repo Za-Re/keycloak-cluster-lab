@@ -1,0 +1,62 @@
+---
+# Ansible log in as its own client, ansible-admin.
+# On the very first run that client doesn't exist yet, so we fall back to the
+# temporary bootstrap admin, just long enough to create it.
+- name: Can ansible-admin log in yet?
+  ansible.builtin.uri:
+    url: "{{ keycloak_config_url }}/realms/master/protocol/openid-connect/token"
+    method: POST
+    body_format: form-urlencoded
+    body:
+      grant_type: client_credentials
+      client_id: "{{ keycloak_config_client_id }}"
+      client_secret: "{{ vault_kc_ansible_client_secret }}"
+    ca_path: "{{ pki_remote_dir }}/ca.crt"
+    # 401 = client unknown (first run); anything else is a real error.
+    # a WRONG secret also gives 401, so it falls back to temp-admin.
+    # Once temp-admin is deleted, a "temp-admin login failed" error usually means
+    # vault_kc_ansible_client_secret doesn't match. Add a clear check if required.
+    status_code: [200, 401]
+  register: keycloak_config_login
+  no_log: true
+
+- name: Remember which login to use
+  ansible.builtin.set_fact:
+    keycloak_config_use_client: "{{ keycloak_config_login.status == 200 }}"
+
+# module_defaults: these login settings apply to every keycloak_* module in the
+# block, so each task only says what to configure. omit = parameter not sent.
+- name: Configure Keycloak through its admin API
+  module_defaults:
+    group/community.general.keycloak:
+      auth_keycloak_url: "{{ keycloak_config_url }}"
+      auth_realm: master
+      auth_client_id: "{{ keycloak_config_use_client | ternary(keycloak_config_client_id, 'admin-cli') }}"
+      auth_client_secret: "{{ keycloak_config_use_client | ternary(vault_kc_ansible_client_secret, omit) }}"
+      auth_username: "{{ keycloak_config_use_client | ternary(omit, keycloak_bootstrap_admin_user) }}"
+      auth_password: "{{ keycloak_config_use_client | ternary(omit, vault_kc_bootstrap_admin_password) }}"
+  block:
+    # Service account only: no browser login, no password grant.
+    - name: master | ansible-admin client (Ansible's service account)
+      community.general.keycloak_client:
+        realm: master
+        client_id: "{{ keycloak_config_client_id }}"
+        public_client: false
+        client_authenticator_type: client-secret
+        secret: "{{ vault_kc_ansible_client_secret }}"
+        service_accounts_enabled: true
+        standard_flow_enabled: false
+        implicit_flow_enabled: false
+        direct_access_grants_enabled: false
+        state: present
+      no_log: true
+
+    # Realm role "admin" in master = may manage all realms.
+    - name: master | ansible-admin may administer Keycloak
+      community.general.keycloak_user_rolemapping:
+        realm: master
+        service_account_user_client_id: "{{ keycloak_config_client_id }}"
+        roles:
+          - name: admin
+        state: present
+      no_log: true

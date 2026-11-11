@@ -28,3 +28,8 @@
   become: true
   roles:
     - haproxy
+
+- name: Keycloak configuration (realms, clients, users) via the admin API
+  hosts: keycloak[0]
+  roles:
+    - keycloak_config

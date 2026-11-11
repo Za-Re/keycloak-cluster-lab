@@ -1,0 +1,8 @@
+---
+# Admin API of the node this role runs on. The keycloak_* modules verify TLS
+# with the host's system trust store, which has the lab CA (roles/pki).
+keycloak_config_url: "https://{{ inventory_hostname }}:{{ keycloak_https_port }}"
+
+# Ansible's own identity in the master realm (client credentials, no human login).
+# Secret: vault_kc_ansible_client_secret.
+keycloak_config_client_id: ansible-admin
